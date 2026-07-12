@@ -1,0 +1,120 @@
+analysis the PDF file, build industry grade zero-STW HFT order book Java application, hard rule:
+1. zero GC, Move the Order pool and PriceLevel arrays off-heap, via unsafe, memorysegment slabs, fixed size records, pointer arithmetic, no GC pressure, no write barriers,keep cold/control state on heap
+2. disable every other STW source
+3. algorithm must have: 
+order doubly-linked via pool indices (prev/next) to unlink
+pricelevel arrays with ring buffer base offset, O(1) front-removal
+orderIdToPool is O(1) lookup
+4. CPU & threading, no jitter, affinity, receiver = processor on the same thread, no locks, no queue on hot path, can consider LMAX disruptor in next phrase
+5.transport:
+feedsimulator use csv now
+production, not csv, consider aeron subscriber, UDP unicast/multicast or aeron:ipc
+6.close to C++, consider graalvm, eliminate JVM in next phrase
+7. build&run, plain javac,java now, no maven,no gradle
+
+CN
+我要开发一个low latency 的HFT java application, market data capture 我会使用C++/DPDK,  orderbook 我会使用java, direct buffer， unsafe memory，预分配内存的方式，避免JVM的stop the world;我还需要考虑整个eco system, 把event 分发到下游各个strategy pipeline, compliance, risk, audit, log等等，我怎么样使用queue/buffer 来传递消息，decouple各个子系统，又不影响critical path的性能，给我一个系统框图参考；第一阶段我会先做java order book, 和一个csv 的simulator feeder;然后我扩充到C++/DPDK同时不需要对系统做大的变动，直接添加新的模块就可以
+
+
+
+Plan
+I’ve mapped the requirements from your prompt and the PDF task into a build plan for a low-jitter, zero-allocation Java order book.
+Define the target scope
+Build a single-process limit-order-book engine in plain Java.
+Keep the first version runnable with javac/java only.
+Support CSV feed simulation now, with a transport abstraction so production feeds can swap in later.
+
+Lay out the memory model
+Put hot mutable data off-heap:order pool
+price-level storage
+order-id lookup tables if needed for deterministic access
+
+Keep cold/control data on-heap:config
+symbol metadata
+startup wiring
+stats/debug counters
+
+Use fixed-size records and index-based addressing, not object graphs.
+Treat off-heap as slab-allocated structures with manual lifecycle management.
+
+Implement the core book data structures
+Order entries:store orders in a pooled slab
+use prev/next pool indices for O(1) unlink
+avoid object references entirely on the hot path
+
+Price levels:maintain level queues with ring-buffer semantics
+support O(1) front removal
+use a base offset / head index model, not shifting arrays
+
+ID lookup:orderIdToPool as O(1) direct lookup
+no hash map allocations on the hot path if we can avoid them
+
+
+Build the matching algorithm
+Support add, cancel, and modify flows.
+Make matching strictly deterministic.
+Preserve price-time priority.
+Keep all hot-path operations branch-light and allocation-free.
+Separate inbound parsing from matching logic so feed handling never contaminates the matching core.
+
+Eliminate GC and STW sources
+Avoid allocating per event.
+Avoid autoboxing, lambdas on hot paths, streams, and temporary collections.
+Reuse all buffers and parser state.
+Prefer primitive arrays, off-heap slabs, and fixed-size structs.
+Keep logging, metrics, file I/O, and debug paths off the critical path.
+
+Threading and CPU strategy
+Use a single-threaded receiver + processor model initially.
+Keep feed handling and matching on the same thread for minimal jitter.
+No locks on the hot path.
+No queues on the hot path.
+Add CPU affinity hooks later if we decide to pin the thread.
+Treat LMAX Disruptor as a later-phase option only if a multi-stage pipeline becomes necessary.
+
+Transport abstraction
+Phase 1:CSV feed simulator as the input source.
+
+Phase 2:real transport adapter for Aeron subscriber, UDP unicast, UDP multicast, or aeron:ipc.
+
+Design the parser interface so the feed source can be swapped without touching the matching engine.
+
+Runtime and packaging
+Start with plain javac and java.
+No Maven.
+No Gradle.
+Provide a minimal directory layout and shell/batch scripts for compile/run.
+Add a small benchmark harness and deterministic replay mode.
+
+Validation
+Functional tests:insert/cancel/replace
+price-time priority
+crossed book handling
+partial fills
+delete from head/middle/tail
+
+Determinism tests:same input, same output across runs
+
+Performance tests:latency under burst load
+allocation verification
+GC observability
+
+Correctness against CSV scenarios from the exercise material.
+
+JVM reduction roadmap
+Phase 1:Java implementation with minimal JVM overhead.
+
+Phase 2:GraalVM tuning and native-image exploration if viable.
+
+Phase 3:deeper JVM removal strategy only if the benchmark justifies it.
+
+
+Recommended implementation order
+Define the data layout and slab format.
+Implement off-heap order pool and price-level structures.
+Add the matching engine and O(1) ID lookup.
+Wire CSV simulator and deterministic replay.
+Add tests and benchmark harness.
+Profile, then iterate on GC, latency, and thread pinning.
+Prepare the transport abstraction for Aeron/UDP later.
+If you want, I can turn this into a concrete repository structure next, including package layout, class list, and the exact javac/java commands.
