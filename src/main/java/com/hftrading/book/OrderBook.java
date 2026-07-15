@@ -381,16 +381,20 @@ public final class OrderBook {
         int mask = orderIdToSlot.length - 1;
         orderIdToSlot[removeSlot] = EMPTY;
         orderIdKeys[removeSlot] = 0L;
+
+        int hole = removeSlot;
         int slot = (removeSlot + 1) & mask;
         while (orderIdToSlot[slot] != EMPTY) {
-            int rehashIndex = orderIdToSlot[slot];
-            long rehashKey = orderIdKeys[slot];
-            orderIdToSlot[slot] = EMPTY;
-            orderIdKeys[slot] = 0L;
-            int target = mix(rehashKey) & mask;
-            while (orderIdToSlot[target] != EMPTY) target = (target + 1) & mask;
-            orderIdToSlot[target] = rehashIndex;
-            orderIdKeys[target] = rehashKey;
+            long key = orderIdKeys[slot];
+            int target = mix(key) & mask;
+            
+            if (((slot - target) & mask) >= ((slot - hole) & mask)) {
+                orderIdToSlot[hole] = orderIdToSlot[slot];
+                orderIdKeys[hole] = key;
+                orderIdToSlot[slot] = EMPTY;
+                orderIdKeys[slot] = 0L;
+                hole = slot;
+            }
             slot = (slot + 1) & mask;
         }
     }

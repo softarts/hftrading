@@ -2,19 +2,23 @@ package com.hftrading.feed;
 
 import com.hftrading.util.LatencyMeasurement;
 
-import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class CsvFeedSource implements FeedSource {
-    private final BufferedReader reader;
+    private final InputStream in;
     private LatencyMeasurement csvLatency;
     private LatencyMeasurement e2eLatency;
     private final MarketEvent reusableEvent = new MarketEvent();
 
+    private final byte[] buf = new byte[256 * 1024];
+    private int bufLen = 0;
+    private int bufPos = 0;
+
     public CsvFeedSource(Path path) throws IOException {
-        this.reader = Files.newBufferedReader(path);
+        this.in = Files.newInputStream(path);
     }
 
     public void setCsvLatency(LatencyMeasurement csvLatency) {
@@ -27,82 +31,99 @@ public final class CsvFeedSource implements FeedSource {
 
     @Override
     public void close() throws IOException {
-        reader.close();
+        in.close();
     }
 
     @Override
     public void replay(FeedHandler handler) throws IOException {
-        String line;
         while (true) {
-            long e2eStart = (csvLatency != null || e2eLatency != null) ? System.nanoTime() : 0L;
-            line = reader.readLine();
-            if (line == null) break;
-            if (line.isEmpty() || line.charAt(0) == '#') {
-                continue;
+            if (bufPos > 0 && bufLen > 0) {
+                System.arraycopy(buf, bufPos, buf, 0, bufLen - bufPos);
             }
-            parse(line, reusableEvent);
-            if (csvLatency != null) {
-                csvLatency.record(System.nanoTime() - e2eStart);
+            bufLen -= bufPos;
+            bufPos = 0;
+
+            int read = in.read(buf, bufLen, buf.length - bufLen);
+            if (read <= 0) {
+                if (bufLen > 0) {
+                    processLine(buf, 0, bufLen, handler, (csvLatency != null || e2eLatency != null) ? System.nanoTime() : 0L);
+                }
+                break;
             }
-            handler.onEvent(reusableEvent);
-            if (e2eLatency != null) {
-                e2eLatency.record(System.nanoTime() - e2eStart);
+            bufLen += read;
+
+            while (bufPos < bufLen) {
+                long e2eStart = (csvLatency != null || e2eLatency != null) ? System.nanoTime() : 0L;
+                int end = indexOf(buf, (byte)'\n', bufPos, bufLen);
+                if (end == bufLen) {
+                    break;
+                }
+                int len = end - bufPos;
+                if (len > 0 && buf[end - 1] == '\r') {
+                    len--;
+                }
+                processLine(buf, bufPos, bufPos + len, handler, e2eStart);
+                bufPos = end + 1;
             }
         }
     }
 
-    // Zero-allocation parser. Format: TYPE,TS,SYMBOL,ORDERID,SIDE,QTY,PRICE
-    private static void parse(String line, MarketEvent event) {
-        int len = line.length();
-        int pos = 0;
+    private void processLine(byte[] buf, int start, int end, FeedHandler handler, long e2eStart) {
+        if (start >= end || buf[start] == '#') {
+            return;
+        }
+        parse(buf, start, end, reusableEvent);
+        if (csvLatency != null) {
+            csvLatency.record(System.nanoTime() - e2eStart);
+        }
+        handler.onEvent(reusableEvent);
+        if (e2eLatency != null) {
+            e2eLatency.record(System.nanoTime() - e2eStart);
+        }
+    }
 
-        // field 0: type char
-        MessageType type = MessageType.fromCode(line.charAt(pos));
-        pos += 2; // skip char + comma
+    private static void parse(byte[] line, int start, int end, MarketEvent event) {
+        int pos = start;
 
-        // field 1: timestampNanos
-        int end = indexOf(line, ',', pos, len);
-        long ts = parseLong(line, pos, end);
-        pos = end + 1;
+        MessageType type = MessageType.fromCode((char) line[pos]);
+        pos += 2; 
 
-        // field 2: symbol
-        end = indexOf(line, ',', pos, len);
-        int symbol = (int) parseLong(line, pos, end);
-        pos = end + 1;
+        int comma = indexOf(line, (byte) ',', pos, end);
+        long ts = parseLong(line, pos, comma);
+        pos = comma + 1;
 
-        // field 3: orderId
-        end = indexOf(line, ',', pos, len);
-        long orderId = parseLong(line, pos, end);
-        pos = end + 1;
+        comma = indexOf(line, (byte) ',', pos, end);
+        int symbol = (int) parseLong(line, pos, comma);
+        pos = comma + 1;
 
-        // field 4: side char
-        char sideChar = line.charAt(pos);
+        comma = indexOf(line, (byte) ',', pos, end);
+        long orderId = parseLong(line, pos, comma);
+        pos = comma + 1;
+
+        char sideChar = (char) line[pos];
         Side side = (type == MessageType.CANCEL) ? null : Side.fromCode(sideChar);
-        pos += 2; // skip char + comma
+        pos += 2;
 
-        // field 5: quantity
-        end = indexOf(line, ',', pos, len);
-        long quantity = parseLong(line, pos, end);
-        pos = end + 1;
+        comma = indexOf(line, (byte) ',', pos, end);
+        long quantity = parseLong(line, pos, comma);
+        pos = comma + 1;
 
-        // field 6: price (rest of line)
-        long price = parseLong(line, pos, len);
+        long price = parseLong(line, pos, end);
 
         event.set(type, ts, symbol, orderId, side, quantity, price);
     }
 
-    private static int indexOf(String s, char c, int from, int max) {
+    private static int indexOf(byte[] s, byte c, int from, int max) {
         for (int i = from; i < max; i++) {
-            if (s.charAt(i) == c) return i;
+            if (s[i] == c) return i;
         }
         return max;
     }
 
-    /** Parse a non-negative decimal integer from s[start..end) without allocation. */
-    private static long parseLong(String s, int start, int end) {
+    private static long parseLong(byte[] s, int start, int end) {
         long v = 0;
         for (int i = start; i < end; i++) {
-            v = v * 10 + (s.charAt(i) - '0');
+            v = v * 10 + (s[i] - '0');
         }
         return v;
     }

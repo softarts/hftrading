@@ -52,6 +52,7 @@ public final class TestDataTool {
                     } else {
                         Side side = random.nextBoolean() ? Side.BUY : Side.SELL;
                         writer.write("M," + ts++ + "," + productId + "," + orderId + "," + side.code() + "," + qty + "," + price);
+                        liveOrders.add(orderId);
                     }
                     writer.newLine();
                 }

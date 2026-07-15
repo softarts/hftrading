@@ -233,3 +233,27 @@ price 10 554  →  slot = 10554 % 512 = 42  →  COLLISION → sparseLevels.get(
 | MAX_TICKS      | 500     | 512 (power of 2) |
 | RING_SIZE      | n/a     | 512          |
 | Price spread   | ≤ 100   | ≤ RING_SIZE  |
+
+## Latency Results (1M Orders Benchmark)
+
+These results measure processing performance over a **1,000,000 order dataset** with **475,300 peak active orders** across **10 unique products**.
+
+### Performance Metrics
+*   **CsvFeeder (CSV Ingest)**:
+    *   Avg: `130` ns
+    *   p50: `100` ns
+    *   p90: `200` ns
+    *   p99: `400` ns
+    *   p99.9: `1,100` ns
+*   **OrderBook Processing**:
+    *   Avg: `1,023` ns
+    *   p50: `200` ns
+    *   p90: `400` ns
+    *   p99: `700` ns
+    *   p99.9: `2,100` ns
+*   **End-to-End**:
+    *   Avg: `1,208` ns
+    *   p50: `400` ns
+    *   p90: `600` ns
+    *   p99: `1,000` ns
+    *   p99.9: `2,900` ns

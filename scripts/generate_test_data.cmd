@@ -7,6 +7,19 @@ set MAX_ORDERS=%~1
 set PEAK_ORDERS=%~2
 set OUT_FILE=%~3
 set PRODUCTS=%~4
+
+:: If the 2nd argument is not numeric, treat it as the output file
+if not "%PEAK_ORDERS%"=="" (
+    set "IS_NUMERIC="
+    for /f "delims=0123456789" %%a in ("%PEAK_ORDERS%") do set "IS_NUMERIC=%%a"
+    if defined IS_NUMERIC (
+        if "%OUT_FILE%"=="" (
+            set OUT_FILE=%PEAK_ORDERS%
+            set PEAK_ORDERS=
+        )
+    )
+)
+
 if "%MAX_ORDERS%"=="" set MAX_ORDERS=1000000
 if "%PEAK_ORDERS%"=="" set PEAK_ORDERS=%MAX_ORDERS%
 if "%OUT_FILE%"=="" set OUT_FILE=out\bench_%MAX_ORDERS%_peak_%PEAK_ORDERS%.csv

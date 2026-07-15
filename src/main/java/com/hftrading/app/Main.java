@@ -29,6 +29,10 @@ public final class Main {
 
         OrderBook[] books = new OrderBook[AppConfig.MAX_PRODUCTS];
 
+        int[] uniqueProducts = {0};
+        int[] currentActiveOrders = {0};
+        int[] peakActiveOrders = {0};
+
         FeedHandler handler = event -> {
             long start = config.measureLatency ? System.nanoTime() : 0L;
             int symbol = event.symbol();
@@ -36,9 +40,16 @@ public final class Main {
             if (book == null) {
                 book = new OrderBook(Math.max(AppConfig.MAX_ORDERS, config.peakOrders), Math.max(AppConfig.MAX_PRICE_LEVELS, config.peakOrders));
                 books[symbol] = book;
+                uniqueProducts[0]++;
             }
             
+            int before = book.activeOrders();
             book.apply(event);
+            int after = book.activeOrders();
+            currentActiveOrders[0] += (after - before);
+            if (currentActiveOrders[0] > peakActiveOrders[0]) {
+                peakActiveOrders[0] = currentActiveOrders[0];
+            }
             
             if (config.measureLatency) {
                 bookLatency.record(System.nanoTime() - start);
@@ -63,6 +74,8 @@ public final class Main {
             }
         }
         System.out.println("elapsedNs=" + elapsed);
+        System.out.println("PeakActiveOrders=" + peakActiveOrders[0]);
+        System.out.println("UniqueProducts=" + uniqueProducts[0]);
         if (config.measureLatency) {
             System.out.println(csvLatency.summary("CsvFeeder"));
             System.out.println(bookLatency.summary("OrderBook"));
