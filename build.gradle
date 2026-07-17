@@ -1,0 +1,51 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.hftrading'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Aeron IPC transport + embedded MediaDriver (bundles Agrona)
+    implementation 'io.aeron:aeron-all:1.44.1'
+
+    // HdrHistogram — allocation-free percentile histograms for latency probes
+    implementation 'org.hdrhistogram:HdrHistogram:2.1.12'
+
+    // JUnit 5
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Fat JAR: all runtime deps bundled for easy deployment
+jar {
+    manifest {
+        attributes 'Main-Class': 'com.hftrading.app.Main'
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Optional: invoke CMake for the C++ publisher (requires cmake + DPDK/Aeron C++ installed)
+task buildCpp(type: Exec) {
+    group = 'build'
+    description = 'Build C++ MarketDataPublisher via CMake'
+    workingDir "$projectDir/cpp"
+    commandLine 'cmake', '--build', 'build', '--config', 'Release'
+    onlyIf { file("$projectDir/cpp/build").exists() }
+}

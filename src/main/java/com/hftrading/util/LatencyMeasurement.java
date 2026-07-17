@@ -1,41 +1,32 @@
 package com.hftrading.util;
 
-import java.util.Arrays;
-
+/**
+ * @deprecated Replaced by {@link LatencyProbe} + HdrHistogram.
+ *
+ * <p>{@code LatencyMeasurement} used a sort-based approach that allocated a
+ * growing array on the hot path.  {@link LatencyProbe} wraps
+ * {@code org.HdrHistogram.Histogram} which is allocation-free on the hot path
+ * and handles coordinated omission correctly.</p>
+ *
+ * <p>This file is retained only so that external tooling does not fail to
+ * compile. It will be removed in a subsequent cleanup.</p>
+ */
+@Deprecated(forRemoval = true)
 public final class LatencyMeasurement {
-    private long[] samples;
-    private int size;
-    private long total;
 
-    public LatencyMeasurement(int expected) {
-        this.samples = new long[Math.max(1, expected)];
-    }
+    private LatencyMeasurement() {}
 
+    /** @deprecated use {@link LatencyProbe#record(long)} */
+    @Deprecated
     public void record(long nanos) {
-        if (size == samples.length) {
-            samples = Arrays.copyOf(samples, samples.length * 2);
-        }
-        samples[size++] = nanos;
-        total += nanos;
+        throw new UnsupportedOperationException(
+                "LatencyMeasurement is deprecated — use LatencyProbe instead");
     }
 
+    /** @deprecated use {@link LatencyProbe#summary()} */
+    @Deprecated
     public String summary(String name) {
-        long[] sorted = Arrays.copyOf(samples, size);
-        Arrays.sort(sorted);
-        long avg = size == 0 ? 0 : total / size;
-        long p50 = percentile(sorted, 0.50);
-        long p90 = percentile(sorted, 0.90);
-        long p99 = percentile(sorted, 0.99);
-        long p999 = percentile(sorted, 0.999);
-        return name + "LatencyNs{avg=" + avg + ", p50=" + p50 + ", p90=" + p90
-                + ", p99=" + p99 + ", p99.9=" + p999 + ", samples=" + size + "}";
-    }
-
-    private static long percentile(long[] sorted, double p) {
-        if (sorted.length == 0) {
-            return 0;
-        }
-        int index = (int) Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1);
-        return sorted[index];
+        throw new UnsupportedOperationException(
+                "LatencyMeasurement is deprecated — use LatencyProbe instead");
     }
 }

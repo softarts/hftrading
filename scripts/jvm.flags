@@ -1,0 +1,18 @@
+# JVM tuning flags for the HFT trading system
+# Applied via: java @scripts/jvm.flags ...
+#
+# -Xms4g -Xmx4g          : Fixed heap — prevents resize GC pauses mid-benchmark
+# -XX:+UseZGC             : ZGC — concurrent, sub-millisecond pause GC
+# -XX:+AlwaysPreTouch     : Fault all heap pages at startup, eliminating OS page
+#                           faults during benchmark runs
+# -XX:+UnlockExperimentalVMOptions : Required for some ZGC tuning options
+# -XX:+DisableExplicitGC  : Prevents accidental System.gc() from triggering GC
+# -Djava.lang.invoke.stringConcat=BC_SB : Avoids MH-based string concat overhead
+#
+-Xms4g
+-Xmx4g
+-XX:+UseZGC
+-XX:+AlwaysPreTouch
+-XX:+UnlockExperimentalVMOptions
+-XX:+DisableExplicitGC
+-Djava.lang.invoke.stringConcat=BC_SB
