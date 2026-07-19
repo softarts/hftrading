@@ -5,6 +5,7 @@ import com.hftrading.util.LatencyProbe;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.FragmentHandler;
+import net.openhft.affinity.Affinity;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,19 +36,24 @@ public final class AeronFeedSourceImpl implements FeedSource {
 
     private final Subscription subscription;
     private final int fragmentLimit;
-    private final LatencyProbe subscribeProbe;
+    private final int subscriberCpu;
+    private final LatencyProbe aeronProbe;  // measures pure IPC transport latency
     private final MarketEvent reusableEvent = new MarketEvent();
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final int warmupEvents;
+    private int eventCount = 0;
 
     /**
-     * @param config         effective HFT config (channel, stream id, fragment limit)
-     * @param aeron          connected Aeron instance (caller owns lifecycle)
-     * @param subscribeProbe {@code aeron.subscribe} probe, or {@code null} to disable
+     * @param config     effective HFT config (channel, stream id, fragment limit, cpu pin)
+     * @param aeron      connected Aeron instance (caller owns lifecycle)
+     * @param aeronProbe {@code aeron} probe measuring IPC transport latency, or {@code null}
      */
-    public AeronFeedSourceImpl(HftConfig config, Aeron aeron, LatencyProbe subscribeProbe) {
-        this.subscription    = aeron.addSubscription(config.aeronChannel(), config.aeronStreamId());
-        this.fragmentLimit   = config.aeronFragmentLimit();
-        this.subscribeProbe  = subscribeProbe;
+    public AeronFeedSourceImpl(HftConfig config, Aeron aeron, LatencyProbe aeronProbe) {
+        this.subscription  = aeron.addSubscription(config.aeronChannel(), config.aeronStreamId());
+        this.fragmentLimit = config.aeronFragmentLimit();
+        this.subscriberCpu = config.aeronSubscriberCpu();
+        this.aeronProbe    = aeronProbe;
+        this.warmupEvents  = config.benchmarkWarmupEvents();
     }
 
     // -------------------------------------------------------------------------
@@ -60,6 +66,11 @@ public final class AeronFeedSourceImpl implements FeedSource {
      */
     @Override
     public void replay(FeedHandler handler) {
+        if (subscriberCpu >= 0) {
+            Affinity.setAffinity(subscriberCpu);
+            System.out.println("[aeron-sub] pinned to CPU " + subscriberCpu);
+        }
+
         BusySpinIdleStrategy idle = new BusySpinIdleStrategy();
 
         FragmentHandler fragmentHandler = (buffer, offset, length, header) -> {
@@ -67,11 +78,16 @@ public final class AeronFeedSourceImpl implements FeedSource {
 
             MarketEventDecoder.decode(buffer, offset, reusableEvent);
 
-            // aeron.subscribe probe: Aeron IPC transport time (Java publisher only)
-            LatencyProbe.record(subscribeProbe, arrivalNs - reusableEvent.ingressNanos());
+            // aeron probe: arrivalNs - publishNanos = pure IPC transport latency.
+            // publishNanos was written by AeronPublisher into OFFSET_INGRESS_NANOS
+            // just before offer(), so this excludes CSV parse time and queue wait.
+            eventCount++;
+            if (eventCount > warmupEvents) {
+                LatencyProbe.record(aeronProbe, arrivalNs - reusableEvent.ingressNanos());
+            }
 
-            // Overwrite ingressNanos with subscriber arrival time so the downstream
-            // FeedHandler's e2e probe measures from this point forward.
+            // Reset ingressNanos to subscriber arrival so the downstream e2e probe
+            // measures from subscriber receipt to book.apply() completion.
             reusableEvent.ingressNanos(arrivalNs);
 
             handler.onEvent(reusableEvent);

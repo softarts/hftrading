@@ -39,8 +39,7 @@ class HftConfigTest {
         assertEquals(1024, cfg.bookMaxProducts());
         assertEquals(500, cfg.bookTickWindow());
         assertTrue(cfg.latencyCsvParse());
-        assertTrue(cfg.latencyAeronPublish());
-        assertTrue(cfg.latencyAeronSubscribe());
+        assertTrue(cfg.latencyAeron());
         assertTrue(cfg.latencyBookApply());
         assertTrue(cfg.latencyE2e());
         assertEquals(100_000, cfg.benchmarkWarmupEvents());
@@ -72,14 +71,14 @@ class HftConfigTest {
         Path props = write(
                 "pipeline.mode=direct\n" +
                 "latency.csv.parse=false\n" +
-                "latency.aeron.publish=false\n" +
+                "latency.aeron=false\n" +
                 "latency.book.apply=false\n" +
                 "latency.e2e=false\n"
         );
         HftConfig cfg = HftConfig.load(props);
 
         assertFalse(cfg.latencyCsvParse());
-        assertFalse(cfg.latencyAeronPublish());
+        assertFalse(cfg.latencyAeron());
         assertFalse(cfg.latencyBookApply());
         assertFalse(cfg.latencyE2e());
     }

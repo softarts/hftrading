@@ -84,34 +84,48 @@ public final class LatencyProbe {
     // Reporting
     // -------------------------------------------------------------------------
 
+    /** Format a nanosecond value as a human-readable string: ns / µs / ms. */
+    static String fmtNs(long ns) {
+        if (ns < 1_000L)           return ns + "ns";
+        if (ns < 1_000_000L)       return String.format("%.1fus", ns / 1_000.0);
+        if (ns < 1_000_000_000L)   return String.format("%.2fms", ns / 1_000_000.0);
+        return String.format("%.2fs", ns / 1_000_000_000.0);
+    }
+
     public String summary() {
         if (histogram.getTotalCount() == 0) {
-            return String.format("%-22s  (no samples)", name);
+            return String.format("%-16s  (no samples)", name);
         }
-        return String.format(
-                "%-22s  samples=%,d  p50=%,dns  p90=%,dns  p99=%,dns  p99.9=%,dns  p99.99=%,dns  max=%,dns",
+        return String.format("%-16s  %,10d  %8s  %8s  %8s  %8s  %8s  %10s",
                 name,
                 histogram.getTotalCount(),
-                histogram.getValueAtPercentile(50.0),
-                histogram.getValueAtPercentile(90.0),
-                histogram.getValueAtPercentile(99.0),
-                histogram.getValueAtPercentile(99.9),
-                histogram.getValueAtPercentile(99.99),
-                histogram.getMaxValue());
+                fmtNs(histogram.getValueAtPercentile(50.0)),
+                fmtNs(histogram.getValueAtPercentile(90.0)),
+                fmtNs(histogram.getValueAtPercentile(99.0)),
+                fmtNs(histogram.getValueAtPercentile(99.9)),
+                fmtNs(histogram.getValueAtPercentile(99.99)),
+                fmtNs(histogram.getMaxValue()));
     }
 
     /**
-     * Print all enabled probes side-by-side and optionally dump a CSV file.
+     * Print all enabled probes as an aligned table, then optionally dump a CSV.
      *
-     * @param probes        ordered map of probe name → probe (only non-null values)
-     * @param csvOutputPath path to write the CSV report, or {@code null} to skip
+     * @param probes        ordered map of probe name -> probe (non-null values only)
+     * @param csvOutputPath path for the CSV dump, or {@code null} to skip
      */
     public static void printSummary(Map<String, LatencyProbe> probes, String csvOutputPath) {
+        String header = String.format("%-16s  %10s  %8s  %8s  %8s  %8s  %8s  %10s",
+                "Probe", "Samples", "p50", "p90", "p99", "p99.9", "p99.99", "max");
+        String separator = "-".repeat(header.length());
+
         System.out.println("\n=== Latency Report ===");
+        System.out.println(header);
+        System.out.println(separator);
         for (LatencyProbe p : probes.values()) {
             System.out.println(p.summary());
         }
-        System.out.println("======================");
+        System.out.println(separator);
+
         if (csvOutputPath != null && !csvOutputPath.isBlank()) {
             dumpCsv(probes, csvOutputPath);
         }

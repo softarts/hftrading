@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'application'
 }
 
 group = 'com.hftrading'
@@ -16,6 +17,9 @@ dependencies {
     // HdrHistogram — allocation-free percentile histograms for latency probes
     implementation 'org.hdrhistogram:HdrHistogram:2.1.12'
 
+    // CPU affinity pinning (subscriber/publisher thread isolation)
+    implementation 'net.openhft:affinity:3.23.3'
+
     // JUnit 5
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -26,9 +30,25 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// --add-opens required by Aeron/Agrona on Java 17+ (JPMS restricts reflective
+// access to internal JVM classes such as sun.misc.Unsafe and java.nio internals).
+def aeronJvmArgs = [
+    '--add-opens', 'java.base/java.nio=ALL-UNNAMED',
+    '--add-opens', 'java.base/sun.nio.ch=ALL-UNNAMED',
+    '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+    '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED',
+    '--add-opens', 'java.base/java.util.zip=ALL-UNNAMED',
+]
+
 test {
     useJUnitPlatform()
+    jvmArgs aeronJvmArgs
 }
+
 
 // Fat JAR: all runtime deps bundled for easy deployment
 jar {
@@ -41,11 +61,64 @@ jar {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-// Optional: invoke CMake for the C++ publisher (requires cmake + DPDK/Aeron C++ installed)
-task buildCpp(type: Exec) {
+// ── Run tasks ────────────────────────────────────────────────────────────────
+
+application {
+    mainClass = 'com.hftrading.app.Main'
+    applicationDefaultJvmArgs = aeronJvmArgs
+}
+
+task generateTestData(type: JavaExec) {
+    group = 'application'
+    description = '''\
+        Generate benchmark CSV. Override via --args, e.g.:
+          gradlew generateTestData --args="--orders 500000 --peak 10000 --products 5 --output data/my.csv"
+        Default: 1M orders, 1M peak, 10 products -> data/bench_1000000_peak_1000000.csv'''
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.hftrading.util.TestDataTool'
+    jvmArgs aeronJvmArgs
+    // Ensure the data/ directory exists before the JVM starts
+    doFirst {
+        file("$projectDir/data").mkdirs()
+        file("$projectDir/output").mkdirs()
+    }
+    // Default args using the named flags TestDataTool expects
+    args = args ?: [
+        '--orders',   '1000000',
+        '--peak',     '1000000',
+        '--products', '10',
+        '--output',   'data/bench_1000000_peak_1000000.csv'
+    ]
+}
+
+// ── C++ publisher build (optional) ──────────────────────────────────────────
+// Requires: cmake 3.20+, Aeron C++ client (via vcpkg or system install).
+// Run:  gradlew configureCpp buildCpp
+//       (or skip entirely if you only need the Java pipeline)
+
+task configureCpp(type: Exec) {
     group = 'build'
-    description = 'Build C++ MarketDataPublisher via CMake'
+    description = 'Run cmake configure for the C++ MarketDataPublisher'
     workingDir "$projectDir/cpp"
-    commandLine 'cmake', '--build', 'build', '--config', 'Release'
-    onlyIf { file("$projectDir/cpp/build").exists() }
+    // Creates cpp/build/ with Release config
+    def cmd = isWindows()
+        ? ['cmd', '/c', 'cmake -B build -DCMAKE_BUILD_TYPE=Release']
+        : ['cmake', '-B', 'build', '-DCMAKE_BUILD_TYPE=Release']
+    commandLine cmd
+    onlyIf { file("$projectDir/cpp/CMakeLists.txt").exists() }
+}
+
+task buildCpp(type: Exec, dependsOn: configureCpp) {
+    group = 'build'
+    description = 'Compile C++ MarketDataPublisher (depends on configureCpp)'
+    workingDir "$projectDir/cpp"
+    def cmd = isWindows()
+        ? ['cmd', '/c', 'cmake --build build --config Release']
+        : ['cmake', '--build', 'build', '--config', 'Release']
+    commandLine cmd
+    onlyIf { file("$projectDir/cpp/CMakeLists.txt").exists() }
+}
+
+static boolean isWindows() {
+    return System.getProperty('os.name').toLowerCase().contains('windows')
 }

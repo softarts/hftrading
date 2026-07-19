@@ -147,12 +147,9 @@ public final class HftConfig {
         return getBool("latency.csv.parse", true);
     }
 
-    public boolean latencyAeronPublish() {
-        return getBool("latency.aeron.publish", true);
-    }
-
-    public boolean latencyAeronSubscribe() {
-        return getBool("latency.aeron.subscribe", true);
+    /** Single Aeron IPC latency probe (replaces separate publish + subscribe probes). */
+    public boolean latencyAeron() {
+        return getBool("latency.aeron", true);
     }
 
     public boolean latencyBookApply() {

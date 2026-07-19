@@ -1,18 +1,22 @@
-# JVM tuning flags for the HFT trading system
-# Applied via: java @scripts/jvm.flags ...
+# JVM flags for low-latency HFT benchmark runs.
+# Passed via Java argument file syntax (Java 9+): java @scripts/jvm.flags ...
 #
-# -Xms4g -Xmx4g          : Fixed heap — prevents resize GC pauses mid-benchmark
-# -XX:+UseZGC             : ZGC — concurrent, sub-millisecond pause GC
-# -XX:+AlwaysPreTouch     : Fault all heap pages at startup, eliminating OS page
-#                           faults during benchmark runs
-# -XX:+UnlockExperimentalVMOptions : Required for some ZGC tuning options
-# -XX:+DisableExplicitGC  : Prevents accidental System.gc() from triggering GC
-# -Djava.lang.invoke.stringConcat=BC_SB : Avoids MH-based string concat overhead
-#
+# -Xms/-Xmx equal          : Fixed heap size -- prevents resize GC pauses
+# -XX:+AlwaysPreTouch      : Fault all heap pages at JVM start, not mid-run
+# -XX:+UseZGC              : Concurrent GC with sub-millisecond pause targets
+# -XX:+DisableExplicitGC   : Blocks accidental System.gc() from pausing the run
+# --add-opens              : Required by Aeron/Agrona on Java 17+ (JPMS)
+
 -Xms4g
 -Xmx4g
--XX:+UseZGC
 -XX:+AlwaysPreTouch
+-XX:+UseZGC
 -XX:+UnlockExperimentalVMOptions
 -XX:+DisableExplicitGC
--Djava.lang.invoke.stringConcat=BC_SB
+-XX:ZCollectionInterval=1
+-Xlog:safepoint=info
+--add-opens java.base/java.nio=ALL-UNNAMED
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED
+--add-opens java.base/java.lang=ALL-UNNAMED
+--add-opens java.base/java.lang.reflect=ALL-UNNAMED
+--add-opens java.base/java.util.zip=ALL-UNNAMED

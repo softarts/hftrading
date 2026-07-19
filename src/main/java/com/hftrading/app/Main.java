@@ -56,16 +56,14 @@ public final class Main {
         int sigDigits = config.latencyHistogramSignificantDigits();
 
         LatencyProbe csvParseProbe      = config.latencyCsvParse()        ? LatencyProbe.create("csv.parse",       sigDigits) : null;
-        LatencyProbe aeronPublishProbe  = config.latencyAeronPublish()    ? LatencyProbe.create("aeron.publish",   sigDigits) : null;
-        LatencyProbe aeronSubscribeProbe= config.latencyAeronSubscribe()  ? LatencyProbe.create("aeron.subscribe", sigDigits) : null;
+        LatencyProbe aeronProbe         = config.latencyAeron()           ? LatencyProbe.create("aeron",           sigDigits) : null;
         LatencyProbe bookApplyProbe     = config.latencyBookApply()       ? LatencyProbe.create("book.apply",      sigDigits) : null;
         LatencyProbe e2eProbe           = config.latencyE2e()             ? LatencyProbe.create("e2e",             sigDigits) : null;
 
         // Ordered map for consistent summary output
         Map<String, LatencyProbe> probes = new LinkedHashMap<>();
         if (csvParseProbe      != null) probes.put("csv.parse",       csvParseProbe);
-        if (aeronPublishProbe  != null) probes.put("aeron.publish",   aeronPublishProbe);
-        if (aeronSubscribeProbe!= null) probes.put("aeron.subscribe", aeronSubscribeProbe);
+        if (aeronProbe         != null) probes.put("aeron",           aeronProbe);
         if (bookApplyProbe     != null) probes.put("book.apply",      bookApplyProbe);
         if (e2eProbe           != null) probes.put("e2e",             e2eProbe);
 
@@ -106,8 +104,13 @@ public final class Main {
         long t0 = System.nanoTime();
 
         if ("aeron".equals(config.pipelineMode())) {
-            runAeronMode(config, bookHandler, csvParseProbe, aeronPublishProbe,
-                         aeronSubscribeProbe, warmupEvents, inputOverride);
+            int publisherCpu = config.aeronPublisherCpu();
+            if (publisherCpu >= 0) {
+                net.openhft.affinity.Affinity.setAffinity(publisherCpu);
+                System.out.println("[aeron-pub] pinned publisher thread to CPU " + publisherCpu);
+            }
+            runAeronMode(config, bookHandler, csvParseProbe, aeronProbe,
+                         warmupEvents, inputOverride);
         } else {
             runDirectMode(config, bookHandler, csvParseProbe, warmupEvents, inputOverride);
         }
@@ -161,8 +164,7 @@ public final class Main {
 
     private static void runAeronMode(HftConfig config, FeedHandler bookHandler,
                                      LatencyProbe csvParseProbe,
-                                     LatencyProbe aeronPublishProbe,
-                                     LatencyProbe aeronSubscribeProbe,
+                                     LatencyProbe aeronProbe,
                                      int warmupEvents,
                                      String inputOverride) throws Exception {
         Path csvPath = inputOverride != null ? Path.of(inputOverride) : config.inputCsvPath();
@@ -177,7 +179,8 @@ public final class Main {
         // Embedded MediaDriver — single JVM process hosts both driver and client
         MediaDriver.Context driverCtx = new MediaDriver.Context()
                 .dirDeleteOnStart(true)
-                .dirDeleteOnShutdown(true);
+                .dirDeleteOnShutdown(true)
+                .threadingMode(io.aeron.driver.ThreadingMode.SHARED);
 
         try (MediaDriver driver = config.aeronEmbedDriver()
                 ? MediaDriver.launchEmbedded(driverCtx)
@@ -192,7 +195,7 @@ public final class Main {
 
                 // Subscriber runs on a dedicated thread, spin-polling the ring
                 AeronFeedSourceImpl subscriber =
-                        new AeronFeedSourceImpl(config, aeron, aeronSubscribeProbe);
+                        new AeronFeedSourceImpl(config, aeron, aeronProbe);
 
                 Thread subThread = new Thread(() -> {
                     try {
@@ -205,7 +208,7 @@ public final class Main {
                 subThread.start();
 
                 // Publisher: CSV → Aeron ring (main thread)
-                try (AeronPublisher publisher = new AeronPublisher(config, aeron, aeronPublishProbe);
+                try (AeronPublisher publisher = new AeronPublisher(config, aeron);
                      CsvFeedSource source = new CsvFeedSource(csvPath, config.inputCsvBufferBytes())) {
 
                     source.setCsvParseProbe(csvParseProbe);

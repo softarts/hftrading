@@ -26,15 +26,12 @@ public final class AeronPublisher implements FeedHandler, AutoCloseable {
 
     private final Publication publication;
     private final UnsafeBuffer sendBuffer;
-    private final LatencyProbe publishProbe;
 
     /**
-     * @param config       effective HFT config (channel, stream id)
-     * @param aeron        connected Aeron instance (caller owns lifecycle)
-     * @param publishProbe {@code aeron.publish} probe, or {@code null} to disable
+     * @param config effective HFT config (channel, stream id)
+     * @param aeron  connected Aeron instance (caller owns lifecycle)
      */
-    public AeronPublisher(HftConfig config, Aeron aeron, LatencyProbe publishProbe) {
-        this.publishProbe = publishProbe;
+    public AeronPublisher(HftConfig config, Aeron aeron) {
         // Allocate a cache-line-aligned direct buffer for the outbound message
         this.sendBuffer = new UnsafeBuffer(
                 BufferUtil.allocateDirectAligned(MarketEventDecoder.MESSAGE_LENGTH, 64));
@@ -49,15 +46,18 @@ public final class AeronPublisher implements FeedHandler, AutoCloseable {
     public void onEvent(MarketEvent event) {
         MarketEventDecoder.encode(sendBuffer, 0, event);
 
-        long offerStart = (publishProbe != null) ? System.nanoTime() : 0L;
-
-        // Busy-spin on back-pressure — acceptable in a dedicated HFT thread
+        // Busy-spin on back-pressure -- acceptable for a dedicated IPC thread
         long result;
         do {
+            // Overwrite OFFSET_INGRESS_NANOS with the actual successful publish timestamp.
+            // Putting this inside the loop ensures that any backpressure waiting time
+            // is excluded from the transit latency measurement.
+            sendBuffer.putLong(MarketEventDecoder.OFFSET_INGRESS_NANOS, System.nanoTime());
             result = publication.offer(sendBuffer, 0, MarketEventDecoder.MESSAGE_LENGTH);
+            if (result < 0 && result != Publication.CLOSED) {
+                Thread.onSpinWait();
+            }
         } while (result < 0 && result != Publication.CLOSED);
-
-        LatencyProbe.record(publishProbe, System.nanoTime() - offerStart);
     }
 
     // -------------------------------------------------------------------------

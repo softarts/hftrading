@@ -94,7 +94,7 @@ class AeronPublisherTest {
         subThread.start();
 
         // Publisher
-        try (AeronPublisher publisher = new AeronPublisher(config, aeron, null)) {
+        try (AeronPublisher publisher = new AeronPublisher(config, aeron)) {
             for (int i = 0; i < eventCount; i++) {
                 MarketEvent ev = new MarketEvent();
                 ev.set(MessageType.NEW_ORDER, 1_000_000_000L + i, 1, i, Side.BUY, 100L + i, 200_000L + i);
@@ -143,14 +143,15 @@ class AeronPublisherTest {
         subThread.setDaemon(true);
         subThread.start();
 
-        long tsNs     = 9_876_543_210L;
-        long ingressNs = 1_111_111_111L;
-        try (AeronPublisher publisher = new AeronPublisher(config, aeron, null)) {
+        long tsNs      = 9_876_543_210L;
+        long beforeSend = System.nanoTime();
+        try (AeronPublisher publisher = new AeronPublisher(config, aeron)) {
             MarketEvent ev = new MarketEvent();
             ev.set(MessageType.REPLACE, tsNs, 42, 7777L, Side.SELL, 500L, 300_000L);
-            ev.ingressNanos(ingressNs);
+            ev.ingressNanos(1_111_111_111L); // original ingress -- publisher overwrites this
             publisher.onEvent(ev);
         }
+        long afterSend = System.nanoTime();
 
         assertTrue(latch.await(5, TimeUnit.SECONDS));
 
@@ -161,7 +162,12 @@ class AeronPublisherTest {
         assertEquals(7777L,               received.orderId());
         assertEquals(500L,                received.quantity());
         assertEquals(300_000L,            received.price());
-        assertEquals(ingressNs,           received.ingressNanos());
+        // ingressNanos is overwritten by the publisher with the actual publish
+        // timestamp so the subscriber can measure pure IPC transport latency
+        assertTrue(received.ingressNanos() >= beforeSend,
+                "publishNanos should be >= time before send");
+        assertTrue(received.ingressNanos() <= afterSend,
+                "publishNanos should be <= time after send");
 
         sub.close();
     }
