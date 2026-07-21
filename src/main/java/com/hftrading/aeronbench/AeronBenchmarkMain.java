@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -197,8 +198,14 @@ public final class AeronBenchmarkMain {
             idle.reset();
         }
         long elapsed = System.nanoTime() - start;
-        System.out.printf("published=%d duration_ms=%.3f throughput_msg_s=%.3f offer_failures=%d%n",
-                o.messages, elapsed / 1_000_000.0, o.messages * 1_000_000_000.0 / elapsed, offerFailures);
+        printTable(
+                new String[] {"published", "duration_ms", "throughput_msg_s", "offer_failures"},
+                new String[] {
+                        Long.toString(o.messages),
+                        String.format("%.3f", elapsed / 1_000_000.0),
+                        String.format("%.3f", o.messages * 1_000_000_000.0 / elapsed),
+                        Long.toString(offerFailures)
+                });
     }
 
     private static void poll(Subscription subscription, SubscriberState state, Options o, AtomicBoolean running) {
@@ -247,9 +254,10 @@ public final class AeronBenchmarkMain {
     }
 
     private static void writeReport(Options o, SubscriberState state, String mode) throws Exception {
+        String timestamp = Instant.now().toString();
         String report = "timestamp,mode,messages,payload,warmup,received,gaps,duplicates_or_reordered,invalid," +
                 "negative_timestamps,p50_ns,p99_ns,p999_ns,max_ns\n" +
-                Instant.now() + "," + mode + "," + o.messages + "," + o.payload + "," + o.warmup + "," +
+                timestamp + "," + mode + "," + o.messages + "," + o.payload + "," + o.warmup + "," +
                 state.received + "," + state.gaps + "," + state.duplicatesOrReordered + "," + state.invalid + "," +
                 state.negativeTimestamps + "," + state.histogram.getValueAtPercentile(50) + "," +
                 state.histogram.getValueAtPercentile(99) + "," + state.histogram.getValueAtPercentile(99.9) + "," +
@@ -257,10 +265,66 @@ public final class AeronBenchmarkMain {
         Path output = Path.of(o.output);
         if (output.getParent() != null) Files.createDirectories(output.getParent());
         Files.writeString(output, report, StandardCharsets.UTF_8);
-        System.out.print(report);
+        printTable(
+                new String[] {
+                        "timestamp", "mode", "messages", "payload", "warmup", "received", "gaps",
+                        "duplicates_or_reordered", "invalid", "negative_timestamps", "p50_ns",
+                        "p99_ns", "p999_ns", "max_ns"
+                },
+                new String[] {
+                        timestamp, mode, Long.toString(o.messages), Integer.toString(o.payload),
+                        Long.toString(o.warmup), Long.toString(state.received), Long.toString(state.gaps),
+                        Long.toString(state.duplicatesOrReordered), Long.toString(state.invalid),
+                        Long.toString(state.negativeTimestamps),
+                        Long.toString(state.histogram.getValueAtPercentile(50)),
+                        Long.toString(state.histogram.getValueAtPercentile(99)),
+                        Long.toString(state.histogram.getValueAtPercentile(99.9)),
+                        Long.toString(state.histogram.getMaxValue())
+                });
         if (state.gaps != 0 || state.duplicatesOrReordered != 0 || state.invalid != 0) {
             throw new IllegalStateException("Correctness validation failed; see report: " + o.output);
         }
+    }
+
+    private static void printTable(String[] headers, String[] values) {
+        if (headers.length != values.length) {
+            throw new IllegalArgumentException("headers and values must have the same length");
+        }
+
+        int[] widths = new int[headers.length];
+        for (int i = 0; i < headers.length; i++) {
+            widths[i] = Math.max(
+                    Objects.toString(headers[i], "").length(),
+                    Objects.toString(values[i], "").length());
+        }
+
+        printBorder(widths);
+        printRow(headers, widths);
+        printBorder(widths);
+        printRow(values, widths);
+        printBorder(widths);
+    }
+
+    private static void printBorder(int[] widths) {
+        StringBuilder line = new StringBuilder();
+        line.append('+');
+        for (int width : widths) {
+            line.append("-".repeat(width + 2)).append('+');
+        }
+        System.out.println(line);
+    }
+
+    private static void printRow(String[] cells, int[] widths) {
+        StringBuilder line = new StringBuilder();
+        line.append('|');
+        for (int i = 0; i < cells.length; i++) {
+            String cell = Objects.toString(cells[i], "");
+            line.append(' ')
+                    .append(cell)
+                    .append(" ".repeat(widths[i] - cell.length()))
+                    .append(" |");
+        }
+        System.out.println(line);
     }
 
     private static int checksum(long sequence, int payloadLength) {
