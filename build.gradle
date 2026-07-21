@@ -96,6 +96,24 @@ task generateTestData(type: JavaExec) {
 // Run:  gradlew configureCpp buildCpp
 //       (or skip entirely if you only need the Java pipeline)
 
+task aeronBenchmark(type: JavaExec, dependsOn: classes) {
+    group = 'application'
+    description = '''\
+        Build and run AeronBenchmarkMain. Override via --args, e.g.:
+          gradlew aeronBenchmark --args="--messages 1000000 --payload 64"
+        Default arguments are supplied by AeronBenchmarkMain.'''
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.hftrading.aeronbench.AeronBenchmarkMain'
+    def java17Executable = file('D:/app/zulu-jdk-17/bin/java.exe')
+    if (java17Executable.exists()) {
+        executable = java17Executable.absolutePath
+    }
+    jvmArgs aeronJvmArgs
+    doFirst {
+        file("$projectDir/output").mkdirs()
+    }
+}
+
 task configureCpp(type: Exec) {
     group = 'build'
     description = 'Run cmake configure for the C++ MarketDataPublisher'

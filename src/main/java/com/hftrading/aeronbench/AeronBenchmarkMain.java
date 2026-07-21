@@ -6,6 +6,8 @@ import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
 import io.aeron.logbuffer.FragmentHandler;
 import org.HdrHistogram.Histogram;
+import org.agrona.concurrent.BackoffIdleStrategy;
+import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
 
 import java.nio.ByteBuffer;
@@ -18,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Standalone Aeron IPC benchmark. It intentionally does not use the trading
@@ -32,6 +35,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class AeronBenchmarkMain {
     private static final int HEADER_LENGTH = Long.BYTES + Long.BYTES + Integer.BYTES;
     private static final long CLOSED = Publication.CLOSED;
+    private static final long MAX_SPINS = 1_000L;
+    private static final long MAX_YIELDS = 1_000L;
+    private static final long MIN_PARK_NS = 1_000L;
+    private static final long MAX_PARK_NS = 100_000L;
 
     private AeronBenchmarkMain() {}
 
@@ -62,17 +69,34 @@ public final class AeronBenchmarkMain {
                 .dirDeleteOnStart(true)
                 .dirDeleteOnShutdown(true);
         try (MediaDriver driver = o.embeddedDriver ? MediaDriver.launchEmbedded(driverContext) : null;
-             Aeron aeron = connect(o)) {
+             Aeron publisherAeron = connect(o);
+             Aeron subscriberAeron = connect(o)) {
             SubscriberState subscriberState = new SubscriberState(o);
-            try (Subscription subscription = aeron.addSubscription(o.channel, o.streamId);
-                 Publication publication = aeron.addPublication(o.channel, o.streamId)) {
+            try (Subscription subscription = subscriberAeron.addSubscription(o.channel, o.streamId);
+                 Publication publication = publisherAeron.addPublication(o.channel, o.streamId)) {
                 awaitConnected(publication, subscription, o.timeoutSeconds);
-                Thread subscriber = new Thread(() -> poll(subscription, subscriberState, o), "aeron-bench-subscriber");
+                AtomicBoolean running = new AtomicBoolean(true);
+                AtomicReference<Throwable> subscriberFailure = new AtomicReference<>();
+                Thread subscriber = new Thread(() -> {
+                    try {
+                        poll(subscription, subscriberState, o, running);
+                    } catch (Throwable t) {
+                        subscriberFailure.set(t);
+                    }
+                }, "aeron-bench-subscriber");
                 subscriber.start();
                 publish(publication, o);
                 subscriber.join(TimeUnit.SECONDS.toMillis(o.timeoutSeconds));
                 if (subscriber.isAlive()) {
+                    running.set(false);
+                    subscriber.join(TimeUnit.SECONDS.toMillis(5));
+                    if (subscriber.isAlive()) {
+                        throw new IllegalStateException("Subscriber did not stop within timeout");
+                    }
                     throw new IllegalStateException("Subscriber did not receive all messages within timeout");
+                }
+                if (subscriberFailure.get() != null) {
+                    throw new IllegalStateException("Subscriber failed", subscriberFailure.get());
                 }
                 writeReport(o, subscriberState, "combined");
             }
@@ -92,19 +116,23 @@ public final class AeronBenchmarkMain {
         try (Aeron aeron = connect(o);
              Subscription subscription = aeron.addSubscription(o.channel, o.streamId)) {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(o.timeoutSeconds);
+            IdleStrategy idle = newIdleStrategy();
             while (subscription.imageCount() == 0 && System.nanoTime() < deadline) {
-                Thread.onSpinWait();
+                idle.idle();
             }
             if (subscription.imageCount() == 0) {
                 throw new IllegalStateException("No Aeron image appeared within timeout");
             }
-            poll(subscription, state, o);
+            poll(subscription, state, o, new AtomicBoolean(true));
             writeReport(o, state, "subscriber");
         }
     }
 
     private static Aeron connect(Options o) {
-        return Aeron.connect(new Aeron.Context().aeronDirectoryName(o.aeronDirectory));
+        return Aeron.connect(new Aeron.Context()
+                .aeronDirectoryName(o.aeronDirectory)
+                .idleStrategy(newIdleStrategy())
+                .awaitingIdleStrategy(newIdleStrategy()));
     }
 
     private static void runDriver(Options o) throws Exception {
@@ -122,8 +150,9 @@ public final class AeronBenchmarkMain {
             throws InterruptedException {
         waitUntilConnected(publication, timeoutSeconds);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        IdleStrategy idle = newIdleStrategy();
         while (subscription.imageCount() == 0 && System.nanoTime() < deadline) {
-            Thread.onSpinWait();
+            idle.idle();
         }
         if (subscription.imageCount() == 0) {
             throw new IllegalStateException("Subscription has no image within timeout");
@@ -133,8 +162,9 @@ public final class AeronBenchmarkMain {
     private static void waitUntilConnected(Publication publication, int timeoutSeconds)
             throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        IdleStrategy idle = newIdleStrategy();
         while (!publication.isConnected() && System.nanoTime() < deadline) {
-            Thread.onSpinWait();
+            idle.idle();
         }
         if (!publication.isConnected()) {
             throw new IllegalStateException("Publication did not connect within timeout");
@@ -146,6 +176,7 @@ public final class AeronBenchmarkMain {
         UnsafeBuffer buffer = new UnsafeBuffer(ByteBuffer.allocateDirect(messageLength));
         long offerFailures = 0;
         long start = System.nanoTime();
+        IdleStrategy idle = newIdleStrategy();
         for (long sequence = 0; sequence < o.messages; sequence++) {
             buffer.putLong(0, sequence);
             buffer.putLong(Long.BYTES, System.nanoTime());
@@ -160,16 +191,17 @@ public final class AeronBenchmarkMain {
                     if (result == CLOSED) {
                         throw new IllegalStateException("Publication closed while publishing sequence " + sequence);
                     }
-                    Thread.onSpinWait();
+                    idle.idle();
                 }
             } while (result < 0);
+            idle.reset();
         }
         long elapsed = System.nanoTime() - start;
         System.out.printf("published=%d duration_ms=%.3f throughput_msg_s=%.3f offer_failures=%d%n",
                 o.messages, elapsed / 1_000_000.0, o.messages * 1_000_000_000.0 / elapsed, offerFailures);
     }
 
-    private static void poll(Subscription subscription, SubscriberState state, Options o) {
+    private static void poll(Subscription subscription, SubscriberState state, Options o, AtomicBoolean running) {
         FragmentHandler handler = (buffer, offset, length, header) -> {
             if (state.received >= o.messages) return;
             if (length < HEADER_LENGTH) {
@@ -193,20 +225,25 @@ public final class AeronBenchmarkMain {
             }
             if (state.received >= o.warmup) {
                 long latency = arrivalNanos - publishedNanos;
-                if (latency >= 0) state.histogram.recordValueWithExpectedInterval(latency, 1);
+                if (latency >= 0) state.histogram.recordValue(latency);
                 else state.negativeTimestamps++;
             }
             state.received++;
         };
 
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(o.timeoutSeconds);
-        while (state.received < o.messages && System.nanoTime() < deadline) {
+        IdleStrategy idle = newIdleStrategy();
+        while (running.get() && state.received < o.messages && System.nanoTime() < deadline) {
             int fragments = subscription.poll(handler, o.fragmentLimit);
-            if (fragments == 0) Thread.onSpinWait();
+            idle.idle(fragments);
         }
         if (state.received != o.messages) {
             throw new IllegalStateException("Expected " + o.messages + " messages but received " + state.received);
         }
+    }
+
+    private static IdleStrategy newIdleStrategy() {
+        return new BackoffIdleStrategy(MAX_SPINS, MAX_YIELDS, MIN_PARK_NS, MAX_PARK_NS);
     }
 
     private static void writeReport(Options o, SubscriberState state, String mode) throws Exception {
